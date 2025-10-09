@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Containerized ToDo List</title>
+</head>
+<body>
+    <h1>Frontend App Status</h1>
+    <p>Trying to connect to backend API...</p>
+    <ul id="task-list"></ul>
+
+    <script>
+        const API_URL = 'http://backend-api:5000/tasks';
+
+        fetch(API_URL)
+            .then(response => response.json())
+            .then(data => {
+                const list = document.getElementById('task-list');
+                list.innerHTML = '<h2>Tasks Loaded Successfully!</h2>';
+                data.forEach(task => {
+                    const item = document.createElement('li');
+                    item.textContent = task.title;
+                    list.appendChild(item);
+                });
+            })
+            .catch(error => {
+                const list = document.getElementById('task-list');
+                list.innerHTML = `<h2>ERROR: Could not connect to API</h2><p>Check the backend-api Service status in Kubernetes.</p>`;
+                console.error('Fetch error:', error);
+            });
+    </script>
+</body>
+</html>

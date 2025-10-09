@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api # <--- The name the frontend will use to communicate!
+  labels:
+    app: backend-app
+spec:
+  # This links the Service to the Deployment (based on the 'app: backend-app' label)
+  selector:
+    app: backend-app
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
