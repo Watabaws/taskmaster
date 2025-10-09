@@ -12,8 +12,6 @@ This repository demonstrates the deployment of a simple two-tier ToDo applicatio
 > * **Frontend:** HTML / JavaScript / Nginx - Static web client served by Nginx.
 > * **Networking:** Kubernetes Services - Internal (ClusterIP) and external (NodePort) routing.
 
----
-
 ## Deployment Architecture
 
 The application is split into two independent services that communicate exclusively through Kubernetes' internal DNS system:
