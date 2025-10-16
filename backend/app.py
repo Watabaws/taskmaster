@@ -1,111 +1,127 @@
 import os
 import json
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import psycopg2
-from flask import Flask, jsonify, request, after_request
-from contextlib import contextmanager
 
 app = Flask(__name__)
+# Enable CORS for all routes (necessary for frontend/backend communication)
+CORS(app)
 
-DB_NAME = os.environ.get('POSTGRES_DB', 'tasks')
-DB_USER = os.environ.get('POSTGRES_USER', 'todo_user')
-DB_PASS = os.environ.get('POSTGRES_PASSWORD', 'supersecret')
-DB_HOST = os.environ.get('POSTGRES_SERVICE_HOST', 'postgres-service')
-DB_PORT = os.environ.get('POSTGRES_SERVICE_PORT', '5432')
+# --- Database Connection Setup ---
+def get_db_connection():
+    # Use environment variables set by Kubernetes for the PostgreSQL Service
+    conn = psycopg2.connect(
+        host=os.environ.get("POSTGRES_HOST", "postgres-service"), # Use the K8s Service name
+        database=os.environ.get("POSTGRES_DB", "postgres"),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
+        password=os.environ.get("POSTGRES_PASSWORD", "password")
+    )
+    return conn
 
-@contextmanager
-def get_db_cursor(commit=False):
-    """Provides a database cursor and handles connection/cursor closing."""
-    conn = None
-    cursor = None
-    try:
-        conn = psycopg2.connect(
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS,
-            host=DB_HOST,
-            port=DB_PORT
-        )
-        cursor = conn.cursor()
-
-        yield cursor
-
-        if commit:
-            conn.commit()
-
-    except Exception as error:
-        print(f"Database error: {error}")
-        # 4. Rollback changes on error
-        if conn:
-            conn.rollback()
-        # Raise the error so the API endpoint can return a 500 status
-        raise
-
-    finally:
-        # 5. Ensure resources are always released
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-
+# --- Database Initialization (Runs once on startup attempt) ---
 def init_db():
-    print("Attempting to initialize database...")
-    # How do we call our new helper to get a cursor and ensure the changes are saved?
-    with get_db_cursor(commit=True) as cur:
-        # SQL to create the table
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Create the tasks table if it doesn't exist
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id SERIAL PRIMARY KEY,
-                title VARCHAR(255) NOT NULL
+                title VARCHAR(255) NOT NULL,
+                completed BOOLEAN NOT NULL DEFAULT FALSE
             );
         """)
-        print("Database table ensured.")
-
-        cur.execute("SELECT count(*) FROM tasks;")
-        if cur.fetchone()[0] == 0:
-            cur.execute("INSERT INTO tasks (title) VALUES ('Containerize backend'), ('Deploy to Minikube');")
-            print("Initial tasks inserted.")
-
-@app.route('/api/tasks', methods=['GET'])
-def get_tasks():
-    with get_db_cursor() as cur:
-        cur.execute("SELECT id, title FROM tasks ORDER BY id;")
-        results = cur.fetchall()
-
-    tasks = [{'id': row[0], 'title': row[1]} for row in results]
-
-    return jsonify(tasks)
-
-@app.route('/api/tasks', methods=['POST'])
-def add_task():
-    """Inserts a new task into the database."""
-    data = request.json
-    title = data.get('title')
-
-    if not title:
-        return jsonify({'error': 'Title is required'}), 400
-
-    try:
-        # DML operation: commit=True is required
-        with get_db_cursor(commit=True) as cur:
-            # We use a parameterized query (title=%s) to prevent SQL Injection.
-            # RETURNING id is used to get the auto-generated primary key back.
-            cur.execute(
-                "INSERT INTO tasks (title) VALUES (%s) RETURNING id;",
-                (title,) # <-- The data is passed as a separate tuple
-            )
-            # Fetch the returned ID
-            new_id = cur.fetchone()[0]
-
-        # Return the newly created task object to the client
-        return jsonify({'id': new_id, 'title': title}), 201
-
+        conn.commit()
+        print("Database initialized successfully.")
     except Exception as e:
-        print(f"POST /api/tasks failed: {e}")
-        return jsonify({'error': 'Failed to save task to database'}), 500
+        # NOTE: In a K8s loop, this often fails initially until Postgres is ready.
+        print(f"Database connection or initialization failed: {e}")
+    finally:
+        if conn:
+            conn.close()
 
+# Initialize database on app startup
+init_db()
 
+# --- API Routes ---
 
-if __name__ == "__main__":
+# ROUTE 1: GET /tasks (Fetch all tasks) and POST /tasks (Create new task)
+@app.route('/tasks', methods=['GET', 'POST'])
+def tasks_route():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Handle GET request to fetch all tasks
+        if request.method == 'GET':
+            cur.execute("SELECT id, title, completed FROM tasks ORDER BY id DESC")
+            tasks = cur.fetchall()
+
+            # Format results into a list of dictionaries
+            task_list = [
+                {"id": task[0], "title": task[1], "completed": task[2]}
+                for task in tasks
+            ]
+            return jsonify(task_list)
+
+        # Handle POST request to create a new task
+        elif request.method == 'POST':
+            data = request.get_json()
+            title = data.get('title')
+
+            if not title:
+                return jsonify({"error": "Title is required"}), 400
+
+            cur.execute("INSERT INTO tasks (title) VALUES (%s) RETURNING id;", (title,))
+            new_id = cur.fetchone()[0]
+            conn.commit()
+
+            return jsonify({"id": new_id, "title": title, "completed": False}), 201
+
+    except psycopg2.OperationalError as e:
+        # Specific error for connection failure (e.g., Postgres not ready)
+        return jsonify({"error": "Database connection failed", "details": str(e)}), 503
+    except Exception as e:
+        # General exception handling
+        print(f"An error occurred: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+# ROUTE 2: PUT /tasks/<int:task_id> (Update task status)
+@app.route('/tasks/<int:task_id>', methods=['PUT'])
+def update_task_route(task_id):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        data = request.get_json()
+        completed = data.get('completed', False) # Default to False if not present
+
+        cur.execute("UPDATE tasks SET completed = %s WHERE id = %s RETURNING id;",
+                    (completed, task_id))
+
+        if cur.rowcount == 0:
+            return jsonify({"error": "Task not found"}), 404
+
+        conn.commit()
+        return jsonify({"message": "Task updated successfully"}), 200
+
+    except psycopg2.OperationalError as e:
+        return jsonify({"error": "Database connection failed", "details": str(e)}), 503
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == '__main__':
+    # This block is typically only used for local debugging, Gunicorn handles production
     app.run(host='0.0.0.0', port=5000)
-

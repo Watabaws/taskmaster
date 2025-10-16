@@ -1,0 +1,12 @@
+/* Custom font for aesthetics */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+body {
+    font-family: 'Inter', sans-serif;
+    background-color: #f7f9fb;
+}
+.task-title {
+    cursor: pointer; /* Indicates it's interactive */
+}
+.task-title:hover {
+    text-decoration: underline;
+}

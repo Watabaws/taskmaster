@@ -1,3 +1,4 @@
 # Add Flask as a requirement
 Flask
 gunicorn
+flask-cors
