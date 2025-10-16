@@ -13,8 +13,28 @@ CORS(app)
 # -----------------------------------------------------------------------------
 # Database configuration & helpers
 # -----------------------------------------------------------------------------
+POSTGRES_SERVICE_NAME = (os.getenv("POSTGRES_SERVICE_NAME") or "postgres-service").strip() or "postgres-service"
+POSTGRES_SERVICE_NAMESPACE = (os.getenv("POSTGRES_SERVICE_NAMESPACE") or "").strip()
+
+
+def _database_hosts() -> list[str]:
+    explicit_host = (os.getenv("POSTGRES_HOST") or "").strip()
+    if explicit_host:
+        return [explicit_host]
+
+    hosts: list[str] = []
+    if POSTGRES_SERVICE_NAMESPACE:
+        hosts.append(
+            f"{POSTGRES_SERVICE_NAME}.{POSTGRES_SERVICE_NAMESPACE}.svc.cluster.local"
+        )
+    hosts.append(f"{POSTGRES_SERVICE_NAME}.svc.cluster.local")
+    hosts.append(POSTGRES_SERVICE_NAME)
+    return hosts
+
+
+DATABASE_HOSTS = _database_hosts()
+
 DATABASE_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST", "postgres-service"),
     "port": int(os.getenv("POSTGRES_PORT", "5432")),
     "database": os.getenv("POSTGRES_DB", "tasks"),
     "user": os.getenv("POSTGRES_USER", "todo_user"),
@@ -51,11 +71,28 @@ INIT_RETRY_DELAY = int(os.getenv("DB_INIT_DELAY_SECONDS", "5"))
 @contextmanager
 def db_connection():
     """Provide a managed database connection."""
-    conn = psycopg2.connect(**DATABASE_CONFIG)
+    last_error = None
+    connection = None
+
+    for host in DATABASE_HOSTS:
+        try:
+            connection = psycopg2.connect(host=host, **DATABASE_CONFIG)
+            break
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+
+    if connection is None:
+        attempted_hosts = ", ".join(DATABASE_HOSTS)
+        if last_error is not None:
+            raise last_error
+        raise psycopg2.OperationalError(
+            f"Unable to connect to PostgreSQL using hosts: {attempted_hosts}"
+        )
+
     try:
-        yield conn
+        yield connection
     finally:
-        conn.close()
+        connection.close()
 
 
 def init_db() -> None:
@@ -90,8 +127,9 @@ def init_db() -> None:
             return
 
     app.logger.error(
-        "Failed to initialise database after %s attempts",
+        "Failed to initialise database after %s attempts (hosts tried: %s)",
         INIT_RETRY_ATTEMPTS,
+        ", ".join(DATABASE_HOSTS),
     )
 
 
