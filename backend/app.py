@@ -13,8 +13,65 @@ CORS(app)
 # -----------------------------------------------------------------------------
 # Database configuration & helpers
 # -----------------------------------------------------------------------------
+POSTGRES_SERVICE_NAME = (os.getenv("POSTGRES_SERVICE_NAME") or "").strip() or "postgres-service"
+POSTGRES_SERVICE_NAMESPACE = (os.getenv("POSTGRES_SERVICE_NAMESPACE") or "").strip()
+_K8S_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+
+def _read_pod_namespace() -> str | None:
+    try:
+        with open(_K8S_NAMESPACE_FILE, "r", encoding="utf-8") as namespace_file:
+            value = namespace_file.read().strip()
+            return value or None
+    except OSError:
+        return None
+
+
+def _build_database_host_candidates() -> list[str]:
+    host_override = (os.getenv("POSTGRES_HOST") or "").strip()
+    if host_override:
+        return [host_override]
+
+    service_name = POSTGRES_SERVICE_NAME
+
+    namespace_hints: list[str] = []
+
+    if POSTGRES_SERVICE_NAMESPACE:
+        namespace_hints.append(POSTGRES_SERVICE_NAMESPACE)
+
+    detected_namespace = _read_pod_namespace()
+    if detected_namespace:
+        namespace_hints.append(detected_namespace)
+
+    namespace_hints.append("default")
+
+    candidates: list[str] = []
+    for namespace in namespace_hints:
+        if namespace:
+            candidates.append(f"{service_name}.{namespace}.svc.cluster.local")
+
+    candidates.extend(
+        [
+            service_name,
+            f"{service_name}.svc.cluster.local",
+        ]
+    )
+
+    seen: set[str] = set()
+    unique_candidates: list[str] = []
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if candidate and candidate not in seen:
+            unique_candidates.append(candidate)
+            seen.add(candidate)
+
+    return unique_candidates
+
+
+DATABASE_HOST_CANDIDATES = _build_database_host_candidates()
+RESOLVED_DATABASE_HOST: str | None = None
+
 DATABASE_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST", "postgres-service"),
     "port": int(os.getenv("POSTGRES_PORT", "5432")),
     "database": os.getenv("POSTGRES_DB", "tasks"),
     "user": os.getenv("POSTGRES_USER", "todo_user"),
@@ -51,11 +108,40 @@ INIT_RETRY_DELAY = int(os.getenv("DB_INIT_DELAY_SECONDS", "5"))
 @contextmanager
 def db_connection():
     """Provide a managed database connection."""
-    conn = psycopg2.connect(**DATABASE_CONFIG)
+    global RESOLVED_DATABASE_HOST
+
+    last_error = None
+    connection = None
+
+    candidates = list(DATABASE_HOST_CANDIDATES or ["postgres-service"])
+
+    if RESOLVED_DATABASE_HOST:
+        candidates = [RESOLVED_DATABASE_HOST] + [
+            host for host in candidates if host != RESOLVED_DATABASE_HOST
+        ]
+
+    for host in candidates:
+        try:
+            connection = psycopg2.connect(host=host, **DATABASE_CONFIG)
+            RESOLVED_DATABASE_HOST = host
+            break
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            if RESOLVED_DATABASE_HOST == host:
+                RESOLVED_DATABASE_HOST = None
+
+    if connection is None:
+        attempted_hosts = ", ".join(candidates)
+        if last_error:
+            raise last_error
+        raise psycopg2.OperationalError(
+            f"Unable to connect to PostgreSQL using hosts: {attempted_hosts}"
+        )
+
     try:
-        yield conn
+        yield connection
     finally:
-        conn.close()
+        connection.close()
 
 
 def init_db() -> None:
@@ -90,8 +176,9 @@ def init_db() -> None:
             return
 
     app.logger.error(
-        "Failed to initialise database after %s attempts",
+        "Failed to initialise database after %s attempts (hosts tried: %s)",
         INIT_RETRY_ATTEMPTS,
+        ", ".join(DATABASE_HOST_CANDIDATES),
     )
 
 
