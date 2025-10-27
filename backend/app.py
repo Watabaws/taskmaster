@@ -1,258 +1,111 @@
 import os
-import time
+import json
+import psycopg2
+from flask import Flask, jsonify, request
 from contextlib import contextmanager
 
-import psycopg2
-import psycopg2.extras
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-
 app = Flask(__name__)
-CORS(app)
 
-# -----------------------------------------------------------------------------
-# Database configuration & helpers
-# -----------------------------------------------------------------------------
-POSTGRES_SERVICE_NAME = (os.getenv("POSTGRES_SERVICE_NAME") or "postgres-service").strip() or "postgres-service"
-POSTGRES_SERVICE_NAMESPACE = (os.getenv("POSTGRES_SERVICE_NAMESPACE") or "").strip()
-
-
-def _database_hosts() -> list[str]:
-    explicit_host = (os.getenv("POSTGRES_HOST") or "").strip()
-    if explicit_host:
-        return [explicit_host]
-
-    hosts: list[str] = []
-    if POSTGRES_SERVICE_NAMESPACE:
-        hosts.append(
-            f"{POSTGRES_SERVICE_NAME}.{POSTGRES_SERVICE_NAMESPACE}.svc.cluster.local"
-        )
-    hosts.append(f"{POSTGRES_SERVICE_NAME}.svc.cluster.local")
-    hosts.append(POSTGRES_SERVICE_NAME)
-    return hosts
-
-
-DATABASE_HOSTS = _database_hosts()
-
-DATABASE_CONFIG = {
-    "port": int(os.getenv("POSTGRES_PORT", "5432")),
-    "database": os.getenv("POSTGRES_DB", "tasks"),
-    "user": os.getenv("POSTGRES_USER", "todo_user"),
-    "password": os.getenv("POSTGRES_PASSWORD", "supersecret"),
-    "connect_timeout": int(os.getenv("POSTGRES_CONNECT_TIMEOUT", "5")),
-}
-
-TABLE_DEFINITION = """
-CREATE TABLE IF NOT EXISTS tasks (
-    id SERIAL PRIMARY KEY,
-    title TEXT NOT NULL,
-    completed BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-"""
-
-DEFAULT_SEED_TASKS = [
-    "Welcome to the Kubernetes ToDo demo!",
-    "Deploy the backend API",
-    "Connect the frontend via the /api proxy",
-]
-
-SEED_TASKS_ENV = os.getenv("SEED_TASKS")
-SEED_TASKS = (
-    [task.strip() for task in SEED_TASKS_ENV.split(",") if task.strip()]
-    if SEED_TASKS_ENV
-    else DEFAULT_SEED_TASKS
-)
-
-INIT_RETRY_ATTEMPTS = int(os.getenv("DB_INIT_ATTEMPTS", "12"))
-INIT_RETRY_DELAY = int(os.getenv("DB_INIT_DELAY_SECONDS", "5"))
-
+DB_NAME = os.environ.get('POSTGRES_DB', 'tasks')
+DB_USER = os.environ.get('POSTGRES_USER', 'todo_user')
+DB_PASS = os.environ.get('POSTGRES_PASSWORD', 'supersecret')
+DB_HOST = os.environ.get('POSTGRES_SERVICE_HOST', 'postgres-service')
+DB_PORT = '5432'
 
 @contextmanager
-def db_connection():
-    """Provide a managed database connection."""
-    last_error = None
-    connection = None
-
-    for host in DATABASE_HOSTS:
-        try:
-            connection = psycopg2.connect(host=host, **DATABASE_CONFIG)
-            break
-        except psycopg2.OperationalError as exc:
-            last_error = exc
-
-    if connection is None:
-        attempted_hosts = ", ".join(DATABASE_HOSTS)
-        if last_error is not None:
-            raise last_error
-        raise psycopg2.OperationalError(
-            f"Unable to connect to PostgreSQL using hosts: {attempted_hosts}"
+def get_db_cursor(commit=False):
+    """Provides a database cursor and handles connection/cursor closing."""
+    conn = None
+    cursor = None
+    try:
+        conn = psycopg2.connect(
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            host=DB_HOST,
+            port=DB_PORT
         )
+        cursor = conn.cursor()
 
-    try:
-        yield connection
+        yield cursor
+
+        if commit:
+            conn.commit()
+
+    except Exception as error:
+        print(f"Database error: {error}")
+        # 4. Rollback changes on error
+        if conn:
+            conn.rollback()
+        # Raise the error so the API endpoint can return a 500 status
+        raise
+
     finally:
-        connection.close()
+        # 5. Ensure resources are always released
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
-def init_db() -> None:
-    """Ensure the tasks table exists and optionally seed data."""
-    for attempt in range(1, INIT_RETRY_ATTEMPTS + 1):
-        try:
-            with db_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(TABLE_DEFINITION)
-                    cur.execute("SELECT COUNT(*) FROM tasks")
-                    existing_rows = cur.fetchone()[0]
+def init_db():
+    print("Attempting to initialize database...")
+    # How do we call our new helper to get a cursor and ensure the changes are saved?
+    with get_db_cursor(commit=True) as cur:
+        # SQL to create the table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                title VARCHAR(255) NOT NULL
+            );
+        """)
+        print("Database table ensured.")
 
-                    if existing_rows == 0 and SEED_TASKS:
-                        cur.executemany(
-                            "INSERT INTO tasks (title) VALUES (%s)",
-                            [(title,) for title in SEED_TASKS],
-                        )
+        cur.execute("SELECT count(*) FROM tasks;")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO tasks (title) VALUES ('Containerize backend'), ('Deploy to Minikube');")
+            print("Initial tasks inserted.")
 
-                conn.commit()
-            app.logger.info("Database initialised (attempt %s)", attempt)
-            return
-        except psycopg2.OperationalError as exc:
-            app.logger.warning(
-                "Database not ready (attempt %s/%s): %s",
-                attempt,
-                INIT_RETRY_ATTEMPTS,
-                exc,
-            )
-            time.sleep(INIT_RETRY_DELAY)
-        except psycopg2.Error as exc:
-            app.logger.exception("Unexpected database error during init: %s", exc)
-            return
+@app.route('/tasks', methods=['GET'])
+def get_tasks():
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id, title FROM tasks ORDER BY id;")
+        results = cur.fetchall()
 
-    app.logger.error(
-        "Failed to initialise database after %s attempts (hosts tried: %s)",
-        INIT_RETRY_ATTEMPTS,
-        ", ".join(DATABASE_HOSTS),
-    )
+    tasks = [{'id': row[0], 'title': row[1]} for row in results]
 
+    return jsonify(tasks)
 
-def serialise_task(row: psycopg2.extras.RealDictRow) -> dict:
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "completed": row["completed"],
-    }
+@app.route('/tasks', methods=['POST'])
+def add_task():
+    """Inserts a new task into the database."""
+    data = request.json
+    title = data.get('title')
 
-
-# Run database initialisation at import time so the container is ready for traffic
-init_db()
-
-
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
-@app.route("/api/health", methods=["GET"])
-def health_check():
-    try:
-        with db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-        return jsonify({"status": "ok"}), 200
-    except psycopg2.Error as exc:
-        return jsonify({"status": "error", "details": str(exc)}), 503
-
-
-@app.route("/api/tasks", methods=["GET", "POST"])
-def tasks_collection():
-    if request.method == "GET":
-        try:
-            with db_connection() as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT id, title, completed FROM tasks ORDER BY id DESC"
-                    )
-                    rows = cur.fetchall()
-            tasks = [serialise_task(row) for row in rows]
-            return jsonify(tasks), 200
-        except psycopg2.Error as exc:
-            app.logger.exception("Failed to fetch tasks")
-            return jsonify({"error": "Database error", "details": str(exc)}), 503
-
-    # POST path
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
     if not title:
-        return jsonify({"error": "Title is required"}), 400
+        return jsonify({'error': 'Title is required'}), 400
 
     try:
-        with db_connection() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    "INSERT INTO tasks (title) VALUES (%s) RETURNING id, title, completed",
-                    (title,),
-                )
-                new_task = cur.fetchone()
-            conn.commit()
-        return jsonify(serialise_task(new_task)), 201
-    except psycopg2.Error as exc:
-        app.logger.exception("Failed to create task")
-        return jsonify({"error": "Database error", "details": str(exc)}), 503
+        # DML operation: commit=True is required
+        with get_db_cursor(commit=True) as cur:
+            # We use a parameterized query (title=%s) to prevent SQL Injection.                                                                                                           
+            # RETURNING id is used to get the auto-generated primary key back.                                                                                                            
+            cur.execute(
+                "INSERT INTO tasks (title) VALUES (%s) RETURNING id;",
+                (title,) # <-- The data is passed as a separate tuple
+            )
+            # Fetch the returned ID
+            new_id = cur.fetchone()[0]
 
+        # Return the newly created task object to the client
+        return jsonify({'id': new_id, 'title': title}), 201
 
-@app.route("/api/tasks/<int:task_id>", methods=["PUT", "DELETE"])
-def task_item(task_id: int):
-    if request.method == "PUT":
-        data = request.get_json(silent=True) or {}
-        updates = []
-        values = []
+    except Exception as e:
+        print(f"POST /api/tasks failed: {e}")
+        return jsonify({'error': 'Failed to save task to database'}), 500
 
-        if "title" in data:
-            title = (data.get("title") or "").strip()
-            if not title:
-                return jsonify({"error": "Title cannot be empty"}), 400
-            updates.append("title = %s")
-            values.append(title)
-
-        if "completed" in data:
-            completed = data.get("completed")
-            if isinstance(completed, bool) or completed in (0, 1):
-                updates.append("completed = %s")
-                values.append(bool(completed))
-            else:
-                return jsonify({"error": "Completed must be a boolean"}), 400
-
-        if not updates:
-            return jsonify({"error": "No fields provided to update"}), 400
-
-        values.append(task_id)
-        update_sql = f"UPDATE tasks SET {', '.join(updates)} WHERE id = %s RETURNING id, title, completed"
-
-        try:
-            with db_connection() as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(update_sql, tuple(values))
-                    updated_task = cur.fetchone()
-                    if not updated_task:
-                        conn.rollback()
-                        return jsonify({"error": "Task not found"}), 404
-                conn.commit()
-            return jsonify(serialise_task(updated_task)), 200
-        except psycopg2.Error as exc:
-            app.logger.exception("Failed to update task")
-            return jsonify({"error": "Database error", "details": str(exc)}), 503
-
-    # DELETE path
-    try:
-        with db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM tasks WHERE id = %s RETURNING id", (task_id,))
-                deleted = cur.fetchone()
-                if not deleted:
-                    conn.rollback()
-                    return jsonify({"error": "Task not found"}), 404
-            conn.commit()
-        return "", 204
-    except psycopg2.Error as exc:
-        app.logger.exception("Failed to delete task")
-        return jsonify({"error": "Database error", "details": str(exc)}), 503
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+    init_db()
+    app.run(host='0.0.0.0', port=5000)
