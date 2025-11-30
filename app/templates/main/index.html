@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Task Manager</title>
+
+    <style>
+        /* Pastel Base styles */
+        :root {
+            --primary-color: #a78bfa; /* Soft Lavender */
+            --primary-hover: #8b5cf6; /* Slightly deeper Lavender */
+            --background-color: #f7f3f0; /* Very light cream/off-white */
+            --card-background: #ffffff;
+            --text-color: #374151; /* Dark text for contrast */
+            --border-color: #e5e7eb;
+
+            /* Pastel Flash Messages */
+            --success-bg: #dcfce7; /* Mint Green Light */
+            --success-text: #059669; /* Mint Green Dark */
+            --error-bg: #fecaca; /* Soft Red Light */
+            --error-text: #dc2626; /* Soft Red Dark */
+
+            /* Pastel Task Status Colors */
+            --complete-bg: #fffbeb; /* Pale Yellow (for Undo button) */
+            --complete-text: #d97706; /* Darker Yellow/Orange */
+            --incomplete-bg: #dbeafe; /* Pale Blue (for Complete button) */
+            --incomplete-text: #1d4ed8; /* Darker Blue */
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--background-color);
+            min-height: 100vh;
+            padding: 1rem;
+        }
+
+        /* Container and Layout */
+        .container {
+            max-width: 48rem; /* Equivalent to max-w-3xl */
+            margin-left: auto;
+            margin-right: auto;
+            padding: 2rem 0;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 2.5rem; /* mb-10 */
+        }
+
+        .header h1 {
+            font-size: 2.25rem; /* text-4xl */
+            font-weight: 800; /* font-extrabold */
+            color: var(--text-color);
+            letter-spacing: -0.025em; /* tracking-tight */
+        }
+
+        .header p {
+            color: #6b7280; /* text-gray-500 */
+            margin-top: 0.5rem;
+        }
+
+        /* Card styles (Task Form and List) */
+        .card {
+            background-color: var(--card-background);
+            padding: 1.5rem; /* p-6 */
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.05); /* Lighter shadow for pastel look */
+            margin-bottom: 2rem;
+            border: 1px solid rgba(0, 0, 0, 0.05); /* Subtle border */
+        }
+
+        .card h2 {
+            font-size: 1.5rem; /* text-2xl */
+            font-weight: 600; /* font-semibold */
+            color: var(--text-color);
+            margin-bottom: 1rem;
+        }
+
+        /* Form elements */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem; /* text-sm */
+            font-weight: 500; /* font-medium */
+            color: var(--text-color);
+            margin-bottom: 0.25rem;
+        }
+
+        .form-input, .form-textarea {
+            display: block;
+            width: 100%;
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem; /* rounded-lg */
+            box-shadow: inset 0 1px 2px 0 rgba(0, 0, 0, 0.03); /* Subtle inset shadow */
+            transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        }
+
+        .form-input:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.5); /* Primary color ring focus */
+        }
+
+        /* Button */
+        .btn-primary {
+            display: block;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid transparent;
+            border-radius: 0.5rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            font-size: 1.125rem; /* text-lg */
+            font-weight: 600; /* Slightly bolder button text */
+            color: white;
+            background-color: var(--primary-color);
+            cursor: pointer;
+            transition: background-color 0.15s ease-in-out, transform 0.1s;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        /* Flash Messages */
+        .flash-message {
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border: 1px solid transparent;
+        }
+
+        .flash-success {
+            background-color: var(--success-bg);
+            color: var(--success-text);
+            border-color: color-mix(in srgb, var(--success-text) 30%, transparent);
+        }
+
+        .flash-error {
+            background-color: var(--error-bg);
+            color: var(--error-text);
+            border-color: color-mix(in srgb, var(--error-text) 30%, transparent);
+        }
+
+        /* Task List Item */
+        .task-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem;
+            background-color: #fefefe; /* Very light background for items */
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            transition: box-shadow 0.2s ease-in-out, background-color 0.2s;
+        }
+
+        .task-item:hover {
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            background-color: #fcfcfc;
+        }
+
+        /* Task Title */
+        .task-title {
+            font-weight: 500;
+            color: var(--text-color);
+            flex-grow: 1; /* Allow title to take space */
+            word-break: break-word;
+        }
+
+        .task-title.completed {
+            color: #9ca3af; /* Gray/muted text */
+            text-decoration: line-through;
+        }
+
+        /* Task Action Button (Complete/Undo) */
+        .btn-action {
+            margin-left: 1rem;
+            padding: 0.35rem 0.85rem;
+            font-size: 0.75rem; /* text-xs */
+            font-weight: 600;
+            border-radius: 20px; /* Slightly more rounded pill shape */
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.15s ease-in-out, box-shadow 0.1s;
+            line-height: 1; /* Fix vertical alignment */
+        }
+
+        .btn-complete {
+            background-color: var(--incomplete-bg);
+            color: var(--incomplete-text);
+        }
+
+        .btn-complete:hover {
+            background-color: #93c5fd; /* Soft blue hover */
+            box-shadow: 0 1px 3px rgba(29, 78, 216, 0.3);
+        }
+
+        .btn-undo {
+            background-color: var(--complete-bg);
+            color: var(--complete-text);
+        }
+
+        .btn-undo:hover {
+            background-color: #fde047; /* Soft yellow hover */
+            box-shadow: 0 1px 3px rgba(217, 119, 6, 0.3);
+        }
+
+        /* Empty State */
+        .empty-list {
+            text-align: center;
+            color: #9ca3af;
+            padding: 1rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="container">
+        <header class="header">
+            <h1>Task Manager</h1>
+            <p>Organize your work, one task at a time.</p>
+        </header>
+
+        <!-- Flash Messages (for Flask's get_flashed_messages) -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message {% if category == 'success' %}flash-success{% else %}flash-error{% endif %}" role="alert">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Task Creation Form -->
+        <div class="card">
+            <h2>Add New Task</h2>
+            <form action="{{ url_for('api.add_task') }}" method="POST" class="space-y-4">
+                <div class="form-group">
+                    <label for="task_title" class="form-label">Task Title</label>
+                    <input
+                        type="text"
+                        name="title"
+                        id="title"
+                        required
+                        placeholder="e.g., Finish project report"
+                        class="form-input"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="task_description" class="form-label">Description (Optional)</label>
+                    <textarea
+                        name="task_description"
+                        id="task_description"
+                        rows="3"
+                        placeholder="Briefly describe the task details..."
+                        class="form-textarea"
+                    ></textarea>
+                </div>
+
+                <button
+                    type="submit"
+                    class="btn-primary"
+                >
+                    Add Task
+                </button>
+            </form>
+        </div>
+
+        <!-- Task List Display (Jinja2 Templating) -->
+        <div class="card">
+            <h2>Current Tasks</h2>
+            <div class="space-y-3">
+                {% if tasks %}
+                    {% for task in tasks %}
+                        <div class="task-item">
+                            <!-- Task Title & Status -->
+                            <span class="task-title {% if task.completed %}completed{% endif %}">
+                                {{ task.name }}
+                            </span>
+
+                            <!-- Task Action Button (Complete/Undo) -->
+                            <form action="{{ url_for('api.complete_task', task_id=task.id) }}" method="POST" class="inline">
+                                <button type="submit" class="btn-action {% if task.completed %}btn-undo{% else %}btn-complete{% endif %}">
+                                    {% if task.completed %}Undo{% else %}Complete{% endif %}
+                                </button>
+                            </form>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="empty-list">No tasks yet! Add one above.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>
