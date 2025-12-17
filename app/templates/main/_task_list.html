@@ -1,0 +1,25 @@
+<!-- Task List Display (Jinja2 Templating) -->
+<div class="card">
+    <h2>Current Tasks</h2>
+    <div class="space-y-3">
+        {% if tasks %}
+            {% for task in tasks %}
+                <div class="task-item">
+                    <!-- Task Title & Status -->
+                    <span class="task-title {% if task.completed %}completed{% endif %}">
+                        {{ task.name }}
+                    </span>
+
+                    <!-- Task Action Button (Complete/Undo) -->
+                    <form action="{{ url_for('api.complete_task', task_id=task.id) }}" method="POST" class="inline">
+                        <button type="submit" class="btn-action {% if task.completed %}btn-undo{% else %}btn-complete{% endif %}">
+                            {% if task.completed %}Undo{% else %}Complete{% endif %}
+                        </button>
+                    </form>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p class="empty-list">No tasks yet! Add one above.</p>
+        {% endif %}
+    </div>
+</div>

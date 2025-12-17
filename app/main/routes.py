@@ -5,5 +5,5 @@ main = Blueprint('main', __name__)
 
 @main.route('/')
 def index():
-    tasks = Task.query.order_by(Task.created_at.desc()).all()
-    return render_template('main/index.html', tasks=tasks)
+    completed_tasks = Task.query.filter_by(is_completed=False).all()
+    return render_template('main/index.html', tasks=completed_tasks)

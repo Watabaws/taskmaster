@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Taskmaster{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen">
+    <div class="container">
+        {% block header %}
+            <header class="header">
+                <h1>Taskmaster</h1>
+                <p>Organized strife, happy life.</p>
+            </header>
+        {% endblock %}
+
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>

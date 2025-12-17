@@ -8,4 +8,5 @@ class Task(db.Model):
     name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
     is_completed = db.Column(db.Boolean, default=False)
+    complete_by = db.Column(db.DateTime, default=None)
 
