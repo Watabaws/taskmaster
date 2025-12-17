@@ -9,7 +9,7 @@ from app.main.routes import main
 
 
 def create_app():
-    app = Flask(__name__, template_folder='app/templates')
+    app = Flask(__name__, template_folder='app/templates', static_folder='app/static')
 
     db_path = Path(app.root_path) / "tasks.db"
 
